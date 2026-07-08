@@ -161,24 +161,45 @@ class IsoViewer(QtInteractor):
     # ---- probing ---------------------------------------------------------
 
     def enable_probe(self, enabled: bool) -> None:
-        """Toggle mouse-click value probing on the volume."""
+        """Toggle left-click value probing on the isosurfaces."""
         self._probe_enabled = enabled
         if enabled and self._grid is not None:
+            # left_clicking=True makes a plain left-click probe (a drag still
+            # orbits the camera); the default trigger is the 'P' key, which is
+            # not discoverable.
             self.enable_point_picking(
-                callback=self._on_probe, show_message=False,
-                use_picker=True, show_point=True,
+                callback=self._on_probe,
+                left_clicking=True,
+                show_message=False,
+                show_point=True,
+                point_size=14,
+                color="#ff3b6b",
+                tolerance=0.02,
+            )
+            self.add_text(
+                "Probe ON — left-click a surface",
+                position="upper_left", font_size=10, name="probe_hint",
+                color="#8a9099",
             )
         else:
             self.disable_picking()
+            for name in ("probe_readout", "probe_hint"):
+                try:
+                    self.remove_actor(name, render=False)
+                except Exception:
+                    pass
+            self.render()
 
-    def _on_probe(self, point) -> None:
+    def _on_probe(self, point, *_) -> None:
         if self._grid is None or point is None:
             return
         idx = self._grid.find_closest_point(point)
         val = self._grid.point_data["amplitude"][idx]
         x, y, t = point
+        amp = "outside scalp" if not np.isfinite(val) else f"{val:.4g}"
         self.add_text(
-            f"({x:.2f}, {y:.2f}, t={t:.1f})  amplitude = {val:.3g}",
-            position="lower_left", font_size=10, name="probe_readout",
+            f"scalp X={x:+.2f}  Y={y:+.2f}   time={t:.2f}\namplitude = {amp}",
+            position="lower_left", font_size=12, name="probe_readout",
             color="#e6e6e6",
         )
+        self.render()
