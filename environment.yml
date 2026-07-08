@@ -1,4 +1,8 @@
 name: isostack
+# All packages come from conda-forge. Do NOT mix a pip-installed PySide6 with the
+# conda-forge qt6-main that VTK pulls in: two Qt6 builds of the same version shadow
+# each other's DLLs and crash on import. Keeping the whole Qt/VTK stack on
+# conda-forge keeps them ABI-consistent.
 channels:
   - conda-forge
 dependencies:
@@ -8,7 +12,5 @@ dependencies:
   - pandas
   - pyvista
   - vtk
-  - pip
-  - pip:
-      - PySide6
-      - pyvistaqt
+  - pyvistaqt
+  - pyside6

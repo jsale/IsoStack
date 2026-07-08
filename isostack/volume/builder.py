@@ -9,7 +9,7 @@ multi-value contouring.
 from __future__ import annotations
 
 import numpy as np
-from scipy.interpolate import griddata
+from scipy.interpolate import RBFInterpolator
 
 from ..data import montage
 from ..data.csv_importer import EEGRecording
@@ -18,8 +18,8 @@ from ..data.csv_importer import EEGRecording
 def build_volume(
     rec: EEGRecording,
     grid_res: int = 48,
-    time_scale: float = 1.0,
-    method: str = "cubic",
+    time_scale: float = 4.0,
+    method: str = "thin_plate_spline",
     mask_outside: bool = True,
 ):
     """Interpolate and stack an EEGRecording into a PyVista uniform grid.
@@ -30,9 +30,12 @@ def build_volume(
     grid_res : int
         Number of samples across the scalp disk in X and Y.
     time_scale : float
-        Multiplier applied to the time axis spacing (visual stretch of the loaf).
+        Loaf aspect ratio: total time-axis height as a multiple of the scalp
+        diameter (e.g. 4.0 => the loaf is 4x as tall as it is wide), independent
+        of the number of samples.
     method : str
-        scipy.interpolate.griddata method: 'cubic', 'linear', or 'nearest'.
+        RBFInterpolator kernel: 'thin_plate_spline' (default, the usual choice for
+        EEG scalp maps), 'multiquadric', 'linear', 'cubic', or 'gaussian'.
     mask_outside : bool
         NaN-out grid points outside the unit scalp disk.
 
@@ -57,26 +60,27 @@ def build_volume(
     gx = np.linspace(-1.0, 1.0, grid_res)
     gy = np.linspace(-1.0, 1.0, grid_res)
     mesh_x, mesh_y = np.meshgrid(gx, gy)                 # (res, res)
+    grid_pts = np.column_stack([mesh_x.ravel(), mesh_y.ravel()])
     outside = (mesh_x**2 + mesh_y**2) > 1.0
 
     n_t = rec.n_samples
     vol = np.empty((grid_res, grid_res, n_t), dtype=np.float32)
 
+    # Radial basis interpolation gives smooth scalp maps and fills the whole disk
+    # (it extrapolates past the electrode hull), so no hole-filling pass is needed.
     for k in range(n_t):
-        slice_vals = griddata(pts, data[k], (mesh_x, mesh_y), method=method, fill_value=np.nan)
-        # fall back to nearest where cubic/linear leaves holes inside the disk
-        if method != "nearest":
-            holes = np.isnan(slice_vals) & ~outside
-            if holes.any():
-                nn = griddata(pts, data[k], (mesh_x, mesh_y), method="nearest")
-                slice_vals[holes] = nn[holes]
+        rbf = RBFInterpolator(pts, data[k], kernel=method)
+        slice_vals = rbf(grid_pts).reshape(mesh_x.shape)
         if mask_outside:
             slice_vals[outside] = np.nan
         vol[:, :, k] = slice_vals
 
+    # Scalp diameter spans 2.0 in X and Y; set the Z spacing so the total loaf
+    # height is (time_scale * 2.0), giving a sample-count-independent aspect ratio.
+    z_spacing = (2.0 * time_scale) / max(n_t - 1, 1)
     grid = pv.ImageData(dimensions=(grid_res, grid_res, n_t))
     grid.origin = (-1.0, -1.0, 0.0)
-    grid.spacing = (2.0 / (grid_res - 1), 2.0 / (grid_res - 1), time_scale)
+    grid.spacing = (2.0 / (grid_res - 1), 2.0 / (grid_res - 1), z_spacing)
     # VTK point ordering is x-fastest, then y, then z -> Fortran order flatten
     grid.point_data["amplitude"] = vol.ravel(order="F")
     return grid

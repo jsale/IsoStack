@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QCheckBox, QDoubleSpinBox, QFormLayout, QGroupBox, QLabel, QPushButton,
-    QSlider, QSpinBox, QVBoxLayout, QWidget,
+    QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout, QGroupBox, QLabel,
+    QPushButton, QSlider, QSpinBox, QVBoxLayout, QWidget,
 )
 
 
@@ -14,6 +14,7 @@ class ControlPanel(QWidget):
 
     iso_values_changed = Signal(list)     # list[float]
     opacity_changed = Signal(float)
+    colormap_changed = Signal(str)
     rebuild_requested = Signal(int, float)  # grid_res, time_scale
     probe_toggled = Signal(bool)
 
@@ -52,6 +53,12 @@ class ControlPanel(QWidget):
             lambda v: self.opacity_changed.emit(v / 100.0)
         )
         appear_form.addRow("Opacity", self._opacity)
+
+        self._cmap = QComboBox()
+        # jet first to match the method's MATLAB heritage; perceptual options after
+        self._cmap.addItems(["jet", "turbo", "viridis", "plasma", "coolwarm", "RdBu_r"])
+        self._cmap.currentTextChanged.connect(self.colormap_changed.emit)
+        appear_form.addRow("Colormap", self._cmap)
         layout.addWidget(appear_box)
 
         # --- Volume ------------------------------------------------------
@@ -63,10 +70,10 @@ class ControlPanel(QWidget):
         vol_form.addRow("Grid resolution", self._grid_res)
 
         self._time_scale = QDoubleSpinBox()
-        self._time_scale.setRange(0.01, 100.0)
-        self._time_scale.setValue(1.0)
-        self._time_scale.setSingleStep(0.1)
-        vol_form.addRow("Time scale", self._time_scale)
+        self._time_scale.setRange(0.1, 50.0)
+        self._time_scale.setValue(4.0)
+        self._time_scale.setSingleStep(0.5)
+        vol_form.addRow("Loaf aspect (H/W)", self._time_scale)
 
         rebuild = QPushButton("Rebuild volume")
         rebuild.clicked.connect(

@@ -5,11 +5,6 @@ from __future__ import annotations
 import numpy as np
 from pyvistaqt import QtInteractor
 
-# A small default colormap of distinct colors for stacked isosurfaces.
-_ISO_COLORS = [
-    "#4C9BE6", "#E67E4C", "#5FBF6A", "#C05FD0", "#E6C84C", "#E65C7A",
-]
-
 
 class IsoViewer(QtInteractor):
     """VTK render window (as a Qt widget) that shows a volume's isosurfaces."""
@@ -21,6 +16,8 @@ class IsoViewer(QtInteractor):
         self.set_background("#1a1d21")
         self._probe_enabled = False
         self._stereo_mode = "off"
+        self._cmap = "jet"          # matches the MATLAB heritage of the method
+        self._last_values: list[float] = []
         self._add_axes()
 
     # ---- volume + isosurfaces -------------------------------------------
@@ -29,36 +26,66 @@ class IsoViewer(QtInteractor):
         """Attach a new volume grid and clear any existing isosurfaces."""
         self._grid = grid
         self.clear_isosurfaces()
+        self._add_scalp_labels()
+        self.reset_camera()
 
     @property
     def grid(self):
         return self._grid
 
+    def _clim(self):
+        """Finite [min, max] of the current volume's amplitude, or None."""
+        if self._grid is None:
+            return None
+        arr = self._grid.point_data["amplitude"]
+        finite = arr[np.isfinite(arr)]
+        if finite.size == 0:
+            return None
+        return [float(finite.min()), float(finite.max())]
+
     def clear_isosurfaces(self) -> None:
         for actor in self._iso_actors:
             self.remove_actor(actor, render=False)
         self._iso_actors = []
+        try:
+            self.remove_scalar_bar("Amplitude")
+        except Exception:
+            pass
         self.render()
 
+    def set_colormap(self, name: str) -> None:
+        """Change the colormap and re-render the current isosurfaces."""
+        self._cmap = name
+        if self._last_values:
+            self.show_isosurfaces(self._last_values, self._opacity_of_last())
+
+    def _opacity_of_last(self) -> float:
+        if self._iso_actors:
+            return self._iso_actors[0].GetProperty().GetOpacity()
+        return 0.6
+
     def show_isosurfaces(self, values: list[float], opacity: float = 0.6) -> None:
-        """Contour the current volume at the given values, one colored surface each."""
+        """Contour the volume at the given values as one mesh, colored by amplitude.
+
+        Nested surfaces (low -> high) share a single colormap and colorbar, matching
+        the established jet-colored spatiotemporal-isosurface look.
+        """
         self.clear_isosurfaces()
+        self._last_values = list(values)
         if self._grid is None or not values:
             return
-        for i, val in enumerate(values):
-            try:
-                surf = self._grid.contour([val], scalars="amplitude")
-            except Exception:
-                continue
-            if surf.n_points == 0:
-                continue
-            color = _ISO_COLORS[i % len(_ISO_COLORS)]
-            actor = self.add_mesh(
-                surf, color=color, opacity=opacity, smooth_shading=True,
-                name=f"iso_{i}", render=False,
-            )
-            self._iso_actors.append(actor)
-        self.reset_camera()
+        try:
+            surf = self._grid.contour(sorted(values), scalars="amplitude")
+        except Exception:
+            return
+        if surf.n_points == 0:
+            return
+        actor = self.add_mesh(
+            surf, scalars="amplitude", cmap=self._cmap, clim=self._clim(),
+            opacity=opacity, smooth_shading=True, name="iso", render=False,
+            scalar_bar_args={"title": "Amplitude", "color": "#e6e6e6"},
+        )
+        self._iso_actors.append(actor)
         self.render()
 
     def last_surface_meshes(self):
@@ -80,6 +107,26 @@ class IsoViewer(QtInteractor):
         self.show_bounds(
             xtitle="Scalp X", ytitle="Scalp Y", ztitle="Time",
             grid="back", location="outer", color="#8a9099",
+        )
+
+    def _add_scalp_labels(self) -> None:
+        """Annotate scalp orientation (Front/Back/Left/Right) at the top cross-section.
+
+        Front = +Y (nose), Right = +X (right ear), matching the montage convention.
+        """
+        if self._grid is None:
+            return
+        z_top = self._grid.bounds[5]
+        points = [[0.0, 1.05, z_top], [0.0, -1.05, z_top],
+                  [1.05, 0.0, z_top], [-1.05, 0.0, z_top]]
+        labels = ["Front", "Back", "Right", "Left"]
+        try:
+            self.remove_actor("scalp_labels", render=False)
+        except Exception:
+            pass
+        self.add_point_labels(
+            points, labels, name="scalp_labels", font_size=12,
+            text_color="#c8ccd2", shape=None, show_points=False, render=False,
         )
 
     # ---- stereo 3D -------------------------------------------------------

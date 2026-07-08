@@ -46,6 +46,7 @@ class MainWindow(QMainWindow):
     def _wire_signals(self) -> None:
         self.controls.iso_values_changed.connect(self._on_iso_values)
         self.controls.opacity_changed.connect(self._on_opacity)
+        self.controls.colormap_changed.connect(self.viewer.set_colormap)
         self.controls.rebuild_requested.connect(self._rebuild_volume)
         self.controls.probe_toggled.connect(self.viewer.enable_probe)
 
