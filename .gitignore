@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+*.egg
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# IsoStack outputs
+exports/
+*.stl
+*.obj
+snapshots/
+*.png
+
+# Data (keep sample_data/ generators, ignore large local datasets)
+data_local/
+*.edf
+*.fif

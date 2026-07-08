@@ -1,0 +1,14 @@
+name: isostack
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - numpy
+  - scipy
+  - pandas
+  - pyvista
+  - vtk
+  - pip
+  - pip:
+      - PySide6
+      - pyvistaqt
