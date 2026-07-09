@@ -141,18 +141,49 @@ class IsoViewer(QtInteractor):
         "crystaleyes": "SetStereoTypeToCrystalEyes",     # active-shutter / quad-buffer
     }
 
+    # Split-viewport renders left-eye-left / right-eye-right, which is *parallel*
+    # (wall-eyed) free-viewing. Cross-eye viewing needs the two images swapped,
+    # which we do by negating the camera eye angle (there is no
+    # SetStereoSwapEyes on this VTK render window).
+    STEREO_SWAP_EYES = {"crosseye"}
+    # Split-viewport modes squeeze each eye into half the window width without
+    # correcting the projection aspect, squashing the 3D content ~2x. We fix it
+    # with an explicit camera aspect of 0.5 * (width/height), refreshed on resize.
+    STEREO_SPLIT_VIEWPORT = {"crosseye"}
+    _EYE_ANGLE = 2.0  # VTK default
+
     def set_stereo_mode(self, mode: str) -> None:
         """Set the stereo render mode (see STEREO_MODES); 'off' disables stereo."""
         if mode not in self.STEREO_MODES:
             raise ValueError(f"Unknown stereo mode {mode!r}")
         self._stereo_mode = mode
         ren_win = self.render_window
+        camera = self.renderer.GetActiveCamera()
+        swap = mode in self.STEREO_SWAP_EYES
+        camera.SetEyeAngle(-self._EYE_ANGLE if swap else self._EYE_ANGLE)
         if mode == "off":
             ren_win.SetStereoRender(False)
         else:
             getattr(ren_win, self.STEREO_MODES[mode])()
             ren_win.SetStereoRender(True)
+        self._apply_stereo_aspect()
         self.render()
+
+    def _apply_stereo_aspect(self) -> None:
+        """Correct the projection aspect for split-viewport stereo modes."""
+        camera = self.renderer.GetActiveCamera()
+        if self._stereo_mode in self.STEREO_SPLIT_VIEWPORT:
+            w, h = self.render_window.GetSize()
+            if h > 0:
+                camera.SetExplicitAspectRatio(0.5 * (w / h))
+                camera.SetUseExplicitAspectRatio(True)
+        else:
+            camera.SetUseExplicitAspectRatio(False)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        super().resizeEvent(event)
+        # window aspect changed -> refresh the split-viewport correction
+        self._apply_stereo_aspect()
 
     @property
     def stereo_mode(self) -> str:
