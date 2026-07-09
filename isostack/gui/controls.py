@@ -23,6 +23,9 @@ class ControlPanel(QWidget):
     probe_toggled = Signal(bool)
     sweep_toggled = Signal(bool)          # sweep mode on/off
     sweep_value_changed = Signal(float)   # current swept iso-value
+    section_toggled = Signal(bool)        # cross-section panel on/off
+    section_changed = Signal(int)         # current cross-section slice index
+    clim_changed = Signal()               # color range (auto flag or values) changed
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -124,7 +127,64 @@ class ControlPanel(QWidget):
         self._cmap.addItems(["jet", "turbo", "viridis", "plasma", "coolwarm", "RdBu_r"])
         self._cmap.currentTextChanged.connect(self.colormap_changed.emit)
         appear_form.addRow("Colormap", self._cmap)
+
+        # Color range: by default the colormap spans the data min/max; unchecking
+        # 'Auto' lets you clamp blue->red to a range of interest (e.g. -100..100)
+        # so mid-range detail isn't washed out by outliers.
+        self._clim_auto = QCheckBox("Auto color range")
+        self._clim_auto.setChecked(True)
+        self._clim_auto.toggled.connect(self._on_clim_auto)
+        appear_form.addRow(self._clim_auto)
+
+        cr_row = QHBoxLayout()
+        self._clim_min = QDoubleSpinBox()
+        self._clim_min.setRange(-1e6, 1e6)
+        self._clim_min.setDecimals(2)
+        self._clim_min.setEnabled(False)
+        self._clim_max = QDoubleSpinBox()
+        self._clim_max.setRange(-1e6, 1e6)
+        self._clim_max.setDecimals(2)
+        self._clim_max.setEnabled(False)
+        for w in (self._clim_min, self._clim_max):
+            w.valueChanged.connect(self._on_clim_edited)
+        cr_row.addWidget(QLabel("min"))
+        cr_row.addWidget(self._clim_min, 1)
+        cr_row.addWidget(QLabel("max"))
+        cr_row.addWidget(self._clim_max, 1)
+        appear_form.addRow(cr_row)
         layout.addWidget(appear_box)
+
+        # --- Segment -----------------------------------------------------
+        # Real recordings run to tens of thousands of samples; pick a time
+        # window and cap the slice count so the loaf builds fast and reads well.
+        seg_box = QGroupBox("Segment (time window)")
+        seg_form = QFormLayout(seg_box)
+        self._seg_start = QDoubleSpinBox()
+        self._seg_start.setRange(0.0, 1e9)
+        self._seg_start.setDecimals(3)
+        seg_form.addRow("Start", self._seg_start)
+
+        self._seg_end = QDoubleSpinBox()
+        self._seg_end.setRange(0.0, 1e9)
+        self._seg_end.setDecimals(3)
+        seg_form.addRow("End", self._seg_end)
+
+        self._seg_max = QSpinBox()
+        self._seg_max.setRange(20, 4000)
+        self._seg_max.setValue(200)
+        self._seg_max.setToolTip("Cap on time slices; the window is evenly decimated to this many.")
+        seg_form.addRow("Max slices", self._seg_max)
+        layout.addWidget(seg_box)
+
+        # Editing the window auto-rebuilds, debounced so dragging a spin box
+        # doesn't fire a rebuild per increment. Programmatic set_time_extent()
+        # blocks these signals, so loading a file doesn't double-build.
+        self._seg_timer = QTimer(self)
+        self._seg_timer.setSingleShot(True)
+        self._seg_timer.setInterval(400)
+        self._seg_timer.timeout.connect(self._emit_rebuild)
+        for w in (self._seg_start, self._seg_end, self._seg_max):
+            w.valueChanged.connect(lambda *_: self._seg_timer.start())
 
         # --- Volume ------------------------------------------------------
         vol_box = QGroupBox("Volume")
@@ -148,6 +208,22 @@ class ControlPanel(QWidget):
         )
         vol_form.addRow(rebuild)
         layout.addWidget(vol_box)
+
+        # --- Cross-section ----------------------------------------------
+        # Slide a horizontal plane through the loaf; the 2D scalp map at that
+        # time updates live in the docked topograph panel.
+        sec_box = QGroupBox("Cross-section (scalp map)")
+        sec_layout = QVBoxLayout(sec_box)
+        self._section_enable = QCheckBox("Show cross-section")
+        self._section_enable.toggled.connect(self._on_section_enable)
+        sec_layout.addWidget(self._section_enable)
+
+        self._section_slider = QSlider(Qt.Horizontal)
+        self._section_slider.setRange(0, 0)
+        self._section_slider.setEnabled(False)
+        self._section_slider.valueChanged.connect(self.section_changed.emit)
+        sec_layout.addWidget(self._section_slider)
+        layout.addWidget(sec_box)
 
         # --- Interaction -------------------------------------------------
         self._probe = QCheckBox("Probe values (click)")
@@ -194,6 +270,74 @@ class ControlPanel(QWidget):
 
     def current_time_scale(self) -> float:
         return self._time_scale.value()
+
+    def set_time_extent(self, t0: float, t1: float) -> None:
+        """Configure the segment window to span a newly loaded recording."""
+        if not (t1 > t0):
+            t1 = t0 + 1.0
+        for spin in (self._seg_start, self._seg_end):
+            spin.blockSignals(True)
+            spin.setRange(float(t0), float(t1))
+        self._seg_start.setValue(float(t0))
+        self._seg_end.setValue(float(t1))
+        for spin in (self._seg_start, self._seg_end):
+            spin.blockSignals(False)
+
+    def current_segment(self) -> tuple[float, float, int]:
+        """Return (start, end, max_slices) for the current time window."""
+        return self._seg_start.value(), self._seg_end.value(), self._seg_max.value()
+
+    def _emit_rebuild(self) -> None:
+        self.rebuild_requested.emit(self._grid_res.value(), self._time_scale.value())
+
+    # ---- cross-section --------------------------------------------------
+
+    def set_section_range(self, n_slices: int) -> None:
+        """Set the cross-section slider to span a volume's time slices."""
+        hi = max(0, n_slices - 1)
+        cur = self._section_slider.value()
+        self._section_slider.blockSignals(True)
+        self._section_slider.setRange(0, hi)
+        self._section_slider.setValue(min(cur, hi))
+        self._section_slider.blockSignals(False)
+
+    def current_section(self) -> int:
+        return self._section_slider.value()
+
+    def section_active(self) -> bool:
+        return self._section_enable.isChecked()
+
+    def _on_section_enable(self, on: bool) -> None:
+        self._section_slider.setEnabled(on)
+        self.section_toggled.emit(on)
+        if on:
+            self.section_changed.emit(self._section_slider.value())
+
+    # ---- color range ----------------------------------------------------
+
+    def color_auto(self) -> bool:
+        return self._clim_auto.isChecked()
+
+    def current_color_range(self) -> tuple[float, float]:
+        return self._clim_min.value(), self._clim_max.value()
+
+    def set_color_range(self, lo: float, hi: float) -> None:
+        """Display a data range in the min/max boxes without emitting changes."""
+        for w in (self._clim_min, self._clim_max):
+            w.blockSignals(True)
+        self._clim_min.setValue(float(lo))
+        self._clim_max.setValue(float(hi))
+        for w in (self._clim_min, self._clim_max):
+            w.blockSignals(False)
+
+    def _on_clim_auto(self, auto: bool) -> None:
+        self._clim_min.setEnabled(not auto)
+        self._clim_max.setEnabled(not auto)
+        self.clim_changed.emit()
+
+    def _on_clim_edited(self, _value: float) -> None:
+        if not self._clim_auto.isChecked():
+            self.clim_changed.emit()
 
     # ---- internal -------------------------------------------------------
 

@@ -46,7 +46,7 @@ def build_volume(
     """
     import pyvista as pv
 
-    known, positions, unknown = montage.resolve_labels(rec.labels)
+    known, positions, unknown = _resolve_positions(rec)
     if len(known) < 4:
         raise ValueError(
             f"Need at least 4 recognized electrodes to interpolate; "
@@ -84,6 +84,31 @@ def build_volume(
     # VTK point ordering is x-fastest, then y, then z -> Fortran order flatten
     grid.point_data["amplitude"] = vol.ravel(order="F")
     return grid
+
+
+def _resolve_positions(rec: EEGRecording):
+    """Return (labels, 2D positions, unknown) for a recording's electrodes.
+
+    Prefers positions embedded in the file (rec.positions) and falls back to the
+    standard-10-20 name lookup for any channel the file didn't place. This is
+    what lets non-standard channel names (e.g. EEGLAB 'EEG 000') resolve when the
+    file carries its own sensor coordinates.
+    """
+    labels: list[str] = []
+    pts: list[tuple[float, float]] = []
+    unknown: list[str] = []
+    for label in rec.labels:
+        pos = None
+        if rec.positions is not None:
+            pos = rec.positions.get(label)
+        if pos is None:
+            pos = montage.position(label)
+        if pos is None:
+            unknown.append(label)
+        else:
+            labels.append(label)
+            pts.append(pos)
+    return labels, pts, unknown
 
 
 def suggest_iso_values(grid, n: int = 3) -> list[float]:

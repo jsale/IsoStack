@@ -12,28 +12,76 @@ class IsoViewer(QtInteractor):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._grid = None
+        self._time_range = None      # (t_start, t_end) in the recording's units
         self._iso_actors: list = []
         self.set_background("#1a1d21")
         self._probe_enabled = False
         self._stereo_mode = "off"
         self._cmap = "jet"          # matches the MATLAB heritage of the method
+        self._user_clim = None      # (lo, hi) override, or None for data range
         self._last_values: list[float] = []
         self._add_axes()
 
     # ---- volume + isosurfaces -------------------------------------------
 
-    def set_volume(self, grid) -> None:
-        """Attach a new volume grid and clear any existing isosurfaces."""
+    def set_volume(self, grid, time_range=None) -> None:
+        """Attach a new volume grid and clear any existing isosurfaces.
+
+        `time_range` is the (start, end) of the built window in the recording's
+        own units (seconds for real data); it labels the Time axis so a
+        re-windowed loaf reads in real time rather than normalized loaf height.
+        """
         self._grid = grid
+        self._time_range = time_range
         self.clear_isosurfaces()
         self._add_scalp_labels()
         self.reset_camera()
+        # Bounds are refreshed by refresh_axes() *after* the isosurfaces are
+        # added — adding a mesh makes VTK's cube-axes actor recompute its tick
+        # range from geometry, which would otherwise wipe the real-time labels.
+
+    def refresh_axes(self) -> None:
+        """Redraw the labeled bounding box; call after isosurfaces are shown."""
+        self._refresh_bounds()
+
+    # ---- cross-section plane --------------------------------------------
+
+    def section_z(self, k: int) -> float:
+        """World Z of the k-th time slice (for syncing the 2D panel)."""
+        if self._grid is None:
+            return 0.0
+        return float(self._grid.origin[2] + k * self._grid.spacing[2])
+
+    def set_section(self, k: int, visible: bool = True) -> None:
+        """Draw (or hide) a wireframe rectangle at the k-th time slice."""
+        try:
+            self.remove_actor("section", render=False)
+        except Exception:
+            pass
+        if visible and self._grid is not None:
+            import pyvista as pv
+
+            z = self.section_z(k)
+            loop = np.array([[-1, -1, z], [1, -1, z], [1, 1, z],
+                             [-1, 1, z], [-1, -1, z]], dtype=float)
+            self.add_mesh(
+                pv.lines_from_points(loop), color="#ff3b6b", line_width=4,
+                name="section", render=False, reset_camera=False,
+            )
+        # adding/removing an actor makes VTK's cube-axes recompute its range from
+        # geometry, wiping the real-time Z labels; reassert them.
+        self._refresh_bounds()
+        self.render()
 
     @property
     def grid(self):
         return self._grid
 
-    def _clim(self):
+    @property
+    def colormap(self) -> str:
+        return self._cmap
+
+    def _data_clim(self):
         """Finite [min, max] of the current volume's amplitude, or None."""
         if self._grid is None:
             return None
@@ -43,9 +91,36 @@ class IsoViewer(QtInteractor):
             return None
         return [float(finite.min()), float(finite.max())]
 
+    def _clim(self):
+        """Color limits in effect: the user override if set, else the data range."""
+        if self._user_clim is not None:
+            return [float(self._user_clim[0]), float(self._user_clim[1])]
+        return self._data_clim()
+
     def amplitude_range(self):
         """Public finite [min, max] of the current volume's amplitude, or None."""
-        return self._clim()
+        return self._data_clim()
+
+    def set_clim(self, lo: float, hi: float) -> None:
+        """Clamp the colormap to [lo, hi] instead of the data range and recolor."""
+        self._user_clim = (float(lo), float(hi))
+        self._recolor()
+
+    def set_clim_auto(self) -> None:
+        """Revert the colormap to spanning the data range and recolor."""
+        self._user_clim = None
+        self._recolor()
+
+    def _recolor(self) -> None:
+        """Rebuild the isosurfaces so the new clim/cmap bakes into the LUT."""
+        if self._last_values:
+            op = self._opacity_of_last()
+            self.clear_isosurfaces()
+            self.show_isosurfaces(self._last_values, op)
+            # re-adding the mesh makes VTK's cube-axes recompute from geometry;
+            # reassert the real-time Z labels.
+            self._refresh_bounds()
+            self.render()
 
     def clear_isosurfaces(self) -> None:
         for actor in self._iso_actors:
@@ -59,13 +134,10 @@ class IsoViewer(QtInteractor):
 
     def set_colormap(self, name: str) -> None:
         """Change the colormap and re-render the current isosurfaces."""
+        # colormap is baked into the mapper's LUT at build time, so a full
+        # rebuild (not an in-place update) is needed to recolor.
         self._cmap = name
-        if self._last_values:
-            op = self._opacity_of_last()
-            # colormap is baked into the mapper's LUT at build time, so a full
-            # rebuild (not an in-place update) is needed to recolor.
-            self.clear_isosurfaces()
-            self.show_isosurfaces(self._last_values, op)
+        self._recolor()
 
     def _opacity_of_last(self) -> float:
         if self._iso_actors:
@@ -139,8 +211,28 @@ class IsoViewer(QtInteractor):
             xlabel="Scalp X", ylabel="Scalp Y", zlabel="Time",
             line_width=2,
         )
+        self._refresh_bounds()
+
+    def _refresh_bounds(self) -> None:
+        """(Re)draw the labeled bounding box, showing real time on the Z ticks.
+
+        The loaf geometry is normalized (Z spans 0..2*aspect), so we relabel the
+        Z tick range to the window's real time via `axes_ranges` while leaving
+        the geometry untouched.
+        """
+        ztitle = "Time"
+        axes_ranges = None
+        if self._grid is not None:
+            b = self._grid.bounds
+            if self._time_range is not None:
+                t0, t1 = float(self._time_range[0]), float(self._time_range[1])
+                if t1 <= t0:                       # degenerate window -> pad
+                    t1 = t0 + 1e-6
+                ztitle = "Time (s)"
+                axes_ranges = [b[0], b[1], b[2], b[3], t0, t1]
         self.show_bounds(
-            xtitle="Scalp X", ytitle="Scalp Y", ztitle="Time",
+            xtitle="Scalp X", ytitle="Scalp Y", ztitle=ztitle,
+            axes_ranges=axes_ranges,
             grid="back", location="outer", color="#8a9099",
         )
 

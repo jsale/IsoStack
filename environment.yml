@@ -14,3 +14,8 @@ dependencies:
   - vtk
   - pyvistaqt
   - pyside6
+  # Real EEG/MEG import (EDF/FIF/BrainVision/EEGLAB) + dataset downloads. Use
+  # mne-base, not the full mne metapackage: base depends only on numpy/scipy and
+  # avoids pulling a second Qt binding that would clash with the pyside6 above.
+  - mne-base
+  - pooch
