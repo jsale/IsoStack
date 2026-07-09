@@ -95,18 +95,29 @@ Cross-eye needed two fixes on VTK's `SplitViewportHorizontal`, both in
 
 ## Packaging (standalone Windows exe)
 
-Build with **PyInstaller from a dedicated all-pip env**, never from the conda
-`isostack` env (conda-forge PySide6 splits Qt DLLs into `Library/bin`, which
-PyInstaller's hooks miss). Recipe:
-```
-conda create -n isostack_build python=3.12 -y
-<env>\python.exe -m pip install numpy scipy pandas vtk pyvista pyvistaqt PySide6 pyinstaller
-```
-Spec must `collect_all`: `vtkmodules`, `vtk`, `pyvista`, `pyvistaqt`, **`matplotlib`**
-(pyvista needs it for colormaps — omitting it crashes with "No module named
-'matplotlib'"), and hidden-import `sample_data.generate_sample` (a function-level
-import). Output is a **onedir** bundle (~600 MB) — distribute by zipping the whole
-folder. First launch is ~5 s (loads the DLLs + builds matplotlib's font cache).
+Just run **`build.bat`** (repo root). It creates the dedicated all-pip
+`isostack_build` conda env on first run, installs the stack, and runs PyInstaller
+with the right flags. Build from that all-pip env, never from the conda `isostack`
+env (conda-forge PySide6 splits Qt DLLs into `Library/bin`, which PyInstaller's
+hooks miss).
+
+Flags that matter (all in `build.bat`):
+- `collect_all`: `vtkmodules`, `vtk`, `pyvista`, `pyvistaqt`, **`matplotlib`**
+  (pyvista needs it for colormaps — omitting it crashes with "No module named
+  'matplotlib'"); hidden-import `sample_data.generate_sample` (function-level import).
+- **mne: use `--collect-submodules mne` + `--collect-data mne`, NOT `--collect-all
+  mne`.** mne lazy-loads its submodules (via `lazy_loader`), so all of them must be
+  bundled — but `--collect-all mne` *also* sweeps binaries and, because the conda
+  build env's `Library/bin` lands on PATH during analysis (via `isostack`'s
+  `_ensure_dll_path`), drags conda's **ICU DLLs (`icuuc`/`icudt78`) into the
+  bundle**, where they clash with PySide6's self-contained Qt →
+  "DLL load failed importing QtWidgets: procedure not found". Submodules+data
+  avoids the binary sweep. (Sanity check a build: `dist/IsoStack/_internal` must
+  have **no** `icu*.dll` at its root.)
+
+Output is a **onedir** bundle (~600 MB) — distribute by zipping the whole folder.
+First launch is ~15–20 s (loads DLLs + builds matplotlib's font cache) before the
+window appears — don't assume a hang.
 
 To verify a *windowed* frozen exe (no console output): launch it, then check the
 process `MainWindowTitle` — the real title is "IsoStack — Spatiotemporal
@@ -134,4 +145,5 @@ Public: https://github.com/jsale/IsoStack
 2. **Multi-band small-multiples** — the 7-loaves-per-frequency-band layout.
 3. **Sleep-stage hypnogram companion** — the aligned W/R/1–4 panel.
 4. Volume-probe mode (probe arbitrary interior amplitudes, not just surfaces).
-5. Single-file exe option; add the PyInstaller spec + a BUILD.md to the repo.
+5. Single-file (onefile) exe option + a BUILD.md. (`build.bat` already produces
+   the onedir bundle; see Packaging.)
