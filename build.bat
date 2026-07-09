@@ -60,10 +60,15 @@ if exist dist  rmdir /s /q dist
 
 REM --- 4. Package with PyInstaller -------------------------------------------
 REM  collect-all: pull every submodule + data file for libraries that load
-REM  things dynamically (VTK/pyvista/mne) or ship data (matplotlib fonts, mne).
+REM  things dynamically (VTK/pyvista) or ship data (matplotlib fonts).
+REM  mne: use collect-SUBMODULES (+ its data), NOT collect-all. mne lazy-loads
+REM  most of itself via lazy_loader, so all its submodules must be bundled; but
+REM  --collect-all mne ALSO sweeps binaries and drags conda's Library\bin ICU
+REM  DLLs (icuuc/icudt) into the bundle, which clash with PySide6's Qt and cause
+REM  "DLL load failed importing QtWidgets: procedure not found". Submodules+data
+REM  gets mne working without that clash.
 REM  hidden-import: sample_data.generate_sample is imported inside a function,
-REM  so static analysis misses it. copy-metadata mne: mne reads its own version
-REM  via importlib.metadata at import time.
+REM  so static analysis misses it.
 echo [4/4] Running PyInstaller...
 "%BUILD_PY%" -m PyInstaller --noconfirm --windowed --name IsoStack ^
     --collect-all vtkmodules ^
@@ -71,10 +76,10 @@ echo [4/4] Running PyInstaller...
     --collect-all pyvista ^
     --collect-all pyvistaqt ^
     --collect-all matplotlib ^
-    --collect-all mne ^
-    --collect-all lazy_loader ^
-    --collect-all pooch ^
-    --copy-metadata mne ^
+    --collect-submodules mne ^
+    --collect-data mne ^
+    --collect-submodules pooch ^
+    --hidden-import lazy_loader ^
     --hidden-import sample_data.generate_sample ^
     main.py
 if errorlevel 1 (

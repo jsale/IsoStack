@@ -7,6 +7,9 @@ build/
 dist/
 *.egg
 
+# PyInstaller (build.bat regenerates the spec from CLI flags)
+*.spec
+
 # Virtual envs
 .venv/
 venv/
