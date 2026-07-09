@@ -25,6 +25,7 @@ class MainWindow(QMainWindow):
 
         self._recording = None
         self._opacity = 0.6
+        self._sweeping = False
 
         self.viewer = IsoViewer(self)
         self.controls = ControlPanel(self)
@@ -49,6 +50,8 @@ class MainWindow(QMainWindow):
         self.controls.colormap_changed.connect(self.viewer.set_colormap)
         self.controls.rebuild_requested.connect(self._rebuild_volume)
         self.controls.probe_toggled.connect(self.viewer.enable_probe)
+        self.controls.sweep_toggled.connect(self._on_sweep_toggled)
+        self.controls.sweep_value_changed.connect(self._on_sweep_value)
 
     def _build_menus(self) -> None:
         m_file = self.menuBar().addMenu("&File")
@@ -136,6 +139,9 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Volume build failed", str(exc))
             return
         self.viewer.set_volume(grid)
+        rng = self.viewer.amplitude_range()
+        if rng is not None:
+            self.controls.set_sweep_range(rng[0], rng[1])
         self.controls.set_suggested_values(builder.suggest_iso_values(grid, n=3))
 
     # ---- viewer callbacks ----------------------------------------------
@@ -150,6 +156,17 @@ class MainWindow(QMainWindow):
 
     def _on_iso_values_current(self) -> None:
         self.controls._emit_iso_values()
+
+    def _on_sweep_toggled(self, active: bool) -> None:
+        self._sweeping = active
+        if not active:
+            # leaving sweep mode: restore the static nested isosurfaces
+            self._on_iso_values_current()
+
+    def _on_sweep_value(self, value: float) -> None:
+        if self._sweeping:
+            # single surface at the swept level; camera/stereo state is untouched
+            self.viewer.show_isosurfaces([value], opacity=self._opacity)
 
     # ---- export ---------------------------------------------------------
 

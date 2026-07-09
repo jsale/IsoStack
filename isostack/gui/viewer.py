@@ -43,6 +43,10 @@ class IsoViewer(QtInteractor):
             return None
         return [float(finite.min()), float(finite.max())]
 
+    def amplitude_range(self):
+        """Public finite [min, max] of the current volume's amplitude, or None."""
+        return self._clim()
+
     def clear_isosurfaces(self) -> None:
         for actor in self._iso_actors:
             self.remove_actor(actor, render=False)
@@ -57,28 +61,59 @@ class IsoViewer(QtInteractor):
         """Change the colormap and re-render the current isosurfaces."""
         self._cmap = name
         if self._last_values:
-            self.show_isosurfaces(self._last_values, self._opacity_of_last())
+            op = self._opacity_of_last()
+            # colormap is baked into the mapper's LUT at build time, so a full
+            # rebuild (not an in-place update) is needed to recolor.
+            self.clear_isosurfaces()
+            self.show_isosurfaces(self._last_values, op)
 
     def _opacity_of_last(self) -> float:
         if self._iso_actors:
             return self._iso_actors[0].GetProperty().GetOpacity()
         return 0.6
 
+    def _contour_surface(self, values: list[float]):
+        """Contour the volume at `values`, returning a mesh with normals, or None."""
+        if self._grid is None or not values:
+            return None
+        try:
+            surf = self._grid.contour(sorted(values), scalars="amplitude")
+        except Exception:
+            return None
+        if surf.n_points == 0:
+            return None
+        # Point normals keep Phong/smooth shading when we swap the mapper input
+        # in place (the mesh from contour has none of its own).
+        try:
+            surf = surf.compute_normals(
+                cell_normals=False, point_normals=True,
+                auto_orient_normals=False, inplace=False,
+            )
+        except Exception:
+            pass
+        return surf
+
     def show_isosurfaces(self, values: list[float], opacity: float = 0.6) -> None:
         """Contour the volume at the given values as one mesh, colored by amplitude.
 
         Nested surfaces (low -> high) share a single colormap and colorbar, matching
         the established jet-colored spatiotemporal-isosurface look.
+
+        When an isosurface actor already exists (e.g. during a sweep) the mesh is
+        updated *in place* rather than removed and re-added — this avoids a blank
+        intermediate frame that otherwise flickers the surface and colorbar.
         """
-        self.clear_isosurfaces()
         self._last_values = list(values)
-        if self._grid is None or not values:
+        surf = self._contour_surface(values)
+        if surf is None:
+            self.clear_isosurfaces()
             return
-        try:
-            surf = self._grid.contour(sorted(values), scalars="amplitude")
-        except Exception:
-            return
-        if surf.n_points == 0:
+        if self._iso_actors:
+            actor = self._iso_actors[0]
+            mapper = actor.GetMapper()
+            mapper.SetInputData(surf)
+            actor.GetProperty().SetOpacity(opacity)
+            self.render()
             return
         actor = self.add_mesh(
             surf, scalars="amplitude", cmap=self._cmap, clim=self._clim(),
